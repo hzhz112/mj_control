@@ -5,26 +5,25 @@ import time
 
 # Integration timestep in seconds. This corresponds to the amount of time the joint
 # velocities will be integrated for to obtain the desired joint positions.
-integration_dt: float = 1.0
+integration_dt: float = 1.0 #积分时间
 
 # Damping term for the pseudoinverse. This is used to prevent joint velocities from
 # becoming too large when the Jacobian is close to singular.
-damping: float = 1e-4
+damping: float = 1e-4 #阻尼伪逆的阻尼系数
 
 # Whether to enable gravity compensation.
-gravity_compensation: bool = True
+gravity_compensation: bool = True #开启重力补偿
 
 # Simulation timestep in seconds.
-dt: float = 0.002
+dt: float = 0.002 #模拟时间步长 理论运行频率500HZ
 
 # Maximum allowable joint velocity in rad/s. Set to 0 to disable.
-max_angvel = 0.0
-
+max_angvel = 0.0 #最大允许关节速度
 
 def main() -> None:
     assert mujoco.__version__ >= "3.1.0", "Please upgrade to mujoco 3.1.0 or later."
 
-    # Load the model and data.
+    # 加载模型
     model = mujoco.MjModel.from_xml_path("universal_robots_ur5e/scene.xml")
     data = mujoco.MjData(model)
 
@@ -33,7 +32,7 @@ def main() -> None:
 
     # End-effector site we wish to control, in this case a site attached to the last
     # link (wrist_3_link) of the robot.
-    site_id = model.site("attachment_site").id
+    site_id = model.site("attachment_site").id #末端
 
     # Name of bodies we wish to apply gravity compensation to.
     body_names = [
@@ -44,7 +43,7 @@ def main() -> None:
         "wrist_2_link",
         "wrist_3_link",
     ]
-    body_ids = [model.body(name).id for name in body_names]
+    body_ids = [model.body(name).id for name in body_names] #获得这些 body 的 ID
     if gravity_compensation:
         model.body_gravcomp[body_ids] = 1.0
 
@@ -58,18 +57,19 @@ def main() -> None:
         "wrist_3",
     ]
     dof_ids = np.array([model.joint(name).id for name in joint_names])
+    # print(f"Controlling joints: {dof_ids}")
     # Note that actuator names are the same as joint names in this case.
     actuator_ids = np.array([model.actuator(name).id for name in joint_names])
 
     # Initial joint configuration saved as a keyframe in the XML file.
-    key_id = model.key("home").id
+    key_id = model.key("home").id #初始姿态
 
     # Mocap body we will control with our mouse.
-    mocap_id = model.body("target").mocapid[0]
+    mocap_id = model.body("target").mocapid[0]  #有一个target body, 这个body是mocap类型的，mocap类型的body可以通过鼠标控制它的位置和姿态
 
     # Pre-allocate numpy arrays.
     jac = np.zeros((6, model.nv))
-    diag = damping * np.eye(6)
+    diag = damping * np.eye(6) #λI
     error = np.zeros(6)
     error_pos = error[:3]
     error_ori = error[3:]
@@ -77,7 +77,7 @@ def main() -> None:
     site_quat_conj = np.zeros(4)
     error_quat = np.zeros(4)
 
-    # Define a trajectory for the end-effector site to follow.
+    # Define a trajectory for the end-effector site to follow. 圆形公式
     def circle(t: float, r: float, h: float, k: float, f: float) -> np.ndarray:
         """Return the (x, y) coordinates of a circle with radius r centered at (h, k)
         as a function of time t and frequency f."""
@@ -95,28 +95,28 @@ def main() -> None:
         mujoco.mjv_defaultFreeCamera(model, viewer.cam)
 
         # Toggle site frame visualization.
-        viewer.opt.frame = mujoco.mjtFrame.mjFRAME_SITE
+        viewer.opt.frame = mujoco.mjtFrame.mjFRAME_SITE #显示末端坐标系
 
-        while viewer.is_running():
+        while viewer.is_running(): 
             step_start = time.time()
 
             # Set the target position of the end-effector site.
-            data.mocap_pos[mocap_id, 0:2] = circle(data.time, 0.1, 0.5, 0.0, 0.5)
+            data.mocap_pos[mocap_id, 0:2] = circle(data.time, 0.1, 0.5, 0.0, 0.5) #跟着圆形运动 只动x和y轴
 
             # Position error.
-            error_pos[:] = data.mocap_pos[mocap_id] - data.site(site_id).xpos
+            error_pos[:] = data.mocap_pos[mocap_id] - data.site(site_id).xpos #计算位置误差
 
-            # Orientation error.
+            # Orientation error. 计算姿态误差
             mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat)
-            mujoco.mju_negQuat(site_quat_conj, site_quat)
-            mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj)
+            mujoco.mju_negQuat(site_quat_conj, site_quat) #共轭
+            mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj) #从当前姿态旋转到目标姿态需要旋转多少 qe =  qd*q-1
             mujoco.mju_quat2Vel(error_ori, error_quat, 1.0)
 
             # Get the Jacobian with respect to the end-effector site.
             mujoco.mj_jacSite(model, data, jac[:3], jac[3:], site_id)
 
             # Solve system of equations: J @ dq = error.
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + diag, error)
+            dq = jac.T @ np.linalg.solve(jac @ jac.T + diag, error) #阻尼最小二乘差分 I
 
             # Scale down joint velocities if they exceed maximum.
             if max_angvel > 0:
@@ -125,7 +125,7 @@ def main() -> None:
                     dq *= max_angvel / dq_abs_max
 
             # Integrate joint velocities to obtain joint positions.
-            q = data.qpos.copy()
+            q = data.qpos.copy() 
             mujoco.mj_integratePos(model, q, dq, integration_dt)
 
             # Set the control signal.

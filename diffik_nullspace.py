@@ -1,3 +1,6 @@
+#差分 IK 控制器 + 阻尼最小二乘法 + 零空间控制
+#利用 Panda 多出来的第 7 个自由度，让机械臂的关节姿态尽量靠近 home，避免肘部乱跑
+
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -97,7 +100,7 @@ def main() -> None:
 
             # Spatial velocity (aka twist).
             dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos
-            twist[:3] = Kpos * dx / integration_dt
+            twist[:3] = Kpos * dx / integration_dt #希望在一个 0.1 秒的 IK 积分步中消除大约 95% 的当前位置误差。
             mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat)
             mujoco.mju_negQuat(site_quat_conj, site_quat)
             mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj)
@@ -111,8 +114,9 @@ def main() -> None:
             dq = jac.T @ np.linalg.solve(jac @ jac.T + diag, twist)
 
             # Nullspace control biasing joint velocities towards the home configuration.
+            #TCP 必须跟着 target 走，这是第一优先级；但是如果还有多余自由度，就让机械臂尽量保持接近舒适的 home 姿态。
             dq += (eye - np.linalg.pinv(jac) @ jac) @ (Kn * (q0 - data.qpos[dof_ids]))
-
+            #第一部分负责 末端空间得任务  第二部分零空间任务  零空间投影矩阵 I-J+J
             # Clamp maximum joint velocity.
             dq_abs_max = np.abs(dq).max()
             if dq_abs_max > max_angvel:
