@@ -32,7 +32,7 @@ gravity_compensation: bool = True
 dt: float = 0.002
 
 # With external force compensation or not
-external_force_compensation: bool = False
+external_force_compensation: bool = True
 
 def main() -> None:
     assert mujoco.__version__ >= "3.1.0", "Please upgrade to mujoco 3.1.0 or later."
@@ -88,9 +88,9 @@ def main() -> None:
     M_inv = np.zeros((model.nv, model.nv))
     Mx = np.zeros((6, 6))
 
-    # Assign desired impedance and damping matrixes
+    # 质量矩阵
     Md = np.eye(6)
-    Md_inv = np.linalg.inv(Md)
+    Md_inv = np.linalg.inv(Md) #np.linalg.inv只能用于可逆方阵
 
     with mujoco.viewer.launch_passive(
         model=model,
@@ -110,23 +110,24 @@ def main() -> None:
             step_start = time.time()
 
             # Spatial velocity (aka twist).
-            dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos
-            twist[:3] = Kpos * dx / integration_dt
-            mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat)
-            mujoco.mju_negQuat(site_quat_conj, site_quat)
-            mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj)
+            dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos # ep​=xd​−x
+            twist[:3] = Kpos * dx / integration_dt # 将误差转化为速度  Kpos:希望在下一个积分周期里消除当前位置误差的比例
+            mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat)  # 末端旋转->四元数
+            mujoco.mju_negQuat(site_quat_conj, site_quat) # 四元数的共轭
+            mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj) #计算目标姿态和当前姿态之间的误差
             mujoco.mju_quat2Vel(twist[3:], error_quat, 1.0)
             twist[3:] *= Kori / integration_dt
+            #twist：速度命令
 
             # Jacobian.
             mujoco.mj_jacSite(model, data, jac[:3], jac[3:], site_id)
             
-            # Compute the joint-space inertia matrix.
+            # 计算关节空间惯性矩阵
             mujoco.mj_solveM(model, data, M_inv, np.eye(model.nv))
             M = np.zeros((model.nv, model.nv))
-            mujoco.mj_fullM(model, M, data.qM)
+            mujoco.mj_fullM(model, data, M)
 
-            # Compute the task-space inertia matrix.
+            # 任务空间惯性矩阵
             Mx_inv = jac @ M_inv @ jac.T
             if abs(np.linalg.det(Mx_inv)) >= 1e-2:
                 Mx = np.linalg.inv(Mx_inv)
@@ -138,21 +139,24 @@ def main() -> None:
             ee_body_id = model.body(ee_body_name).id
             f_ext = data.xfrc_applied[ee_body_id]
 
-            # Compute the control law
-            jac_inv = np.linalg.pinv(jac, rcond=1e-2)
-            # The control law without the external force adjustment part
+            # 求伪逆
+            jac_inv = np.linalg.pinv(jac, rcond=1e-2)  
+            # 这里的Y是关节加速度 
             y = jac_inv @ Md_inv @ (Kp * twist - Kd * (jac @ data.qvel[dof_ids]))
             
+            #如果启用外力 在加上外力项
             if external_force_compensation:
                 # The external force adjustment part
                 y += jac_inv @ Md_inv @ (-f_ext)
             
-            tau = M @ y
+
+            #第一项 惯性矩阵乘上所需要的关节加速度  （根据机器人的真实惯性，计算要产生这个关节加速度需要多少力矩）
+            tau = M @ y 
             
             if external_force_compensation:
                 tau += jac.T @ f_ext
                         
-            # Add gravity compensation.
+            # 科氏/离心项 + 重力项补偿
             if gravity_compensation:
                 tau += data.qfrc_bias[dof_ids]
 

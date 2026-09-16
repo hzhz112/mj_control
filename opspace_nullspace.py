@@ -3,19 +3,19 @@ import mujoco.viewer
 import numpy as np
 import time
 
-# Cartesian impedance control gains.
-impedance_pos = np.asarray([100.0, 100.0, 100.0])  # [N/m]
-impedance_ori = np.asarray([50.0, 50.0, 50.0])  # [Nm/rad]
+# 笛卡尔阻抗参数
+impedance_pos = np.asarray([100.0, 100.0, 100.0])  # [N/m]  #位置方向的刚度
+impedance_ori = np.asarray([50.0, 50.0, 50.0])  # [Nm/rad] #姿态方向刚度
 
-# Joint impedance control gains.
-Kp_null = np.asarray([75.0, 75.0, 50.0, 50.0, 40.0, 25.0, 25.0])
+# 零空间关节刚度
+Kp_null = np.asarray([75.0, 75.0, 50.0, 50.0, 40.0, 25.0, 25.0]) 
 
-# Damping ratio for both Cartesian and joint impedance control.
+# Damping ratio for both Cartesian and joint impedance control. 阻尼比
 damping_ratio = 1.0
 
 # Gains for the twist computation. These should be between 0 and 1. 0 means no
-# movement, 1 means move the end-effector to the target in one integration step.
-Kpos: float = 0.95
+# movement, 1 means move the end-effector to the target in one integration step.  位置误差转换增益
+Kpos: float = 0.95 
 
 # Gain for the orientation component of the twist computation. This should be
 # between 0 and 1. 0 means no movement, 1 means move the end-effector to the target
@@ -97,16 +97,16 @@ def main() -> None:
         # Reset the free camera.
         mujoco.mjv_defaultFreeCamera(model, viewer.cam)
 
-        # Enable site frame visualization.
+        # Enable site frame visualization. 显示 site 坐标系
         viewer.opt.frame = mujoco.mjtFrame.mjFRAME_SITE
         while viewer.is_running():
             step_start = time.time()
 
             # Spatial velocity (aka twist).
-            dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos
+            dx = data.mocap_pos[mocap_id] - data.site(site_id).xpos  #ep​=xd​−x
             twist[:3] = Kpos * dx / integration_dt
-            mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat)
-            mujoco.mju_negQuat(site_quat_conj, site_quat)
+            mujoco.mju_mat2Quat(site_quat, data.site(site_id).xmat) #末端旋转->四元数
+            mujoco.mju_negQuat(site_quat_conj, site_quat) #四元数的共轭
             mujoco.mju_mulQuat(error_quat, data.mocap_quat[mocap_id], site_quat_conj)
             
             mujoco.mju_quat2Vel(twist[3:], error_quat, 1.0)
@@ -127,7 +127,7 @@ def main() -> None:
             tau = jac.T @ Mx @ (Kp * twist - Kd * (jac @ data.qvel[dof_ids]))
 
             # Add joint task in nullspace.
-            Jbar = M_inv @ jac.T @ Mx
+            Jbar = M_inv @ jac.T @ Mx #动力学一致伪逆
             ddq = Kp_null * (q0 - data.qpos[dof_ids]) - Kd_null * data.qvel[dof_ids]
             tau += (np.eye(model.nv) - jac.T @ Jbar.T) @ ddq
 
