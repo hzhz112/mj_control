@@ -3,12 +3,12 @@ import mujoco.viewer
 import numpy as np
 import time
 
-# Cartesian impedance control gains.
-impedance_pos = np.asarray([100.0, 100.0, 100.0])  # [N/m]
+# 笛卡尔空间的控制增益. 越大越硬
+impedance_pos = np.asarray([20.0, 20.0, 20.0])  # [N/m]
 impedance_ori = np.asarray([50.0, 50.0, 50.0])  # [Nm/rad]
 
-# Joint impedance control gains.
-Kp_null = np.asarray([75.0, 75.0, 50.0, 50.0, 40.0, 25.0, 25.0])
+# 零空间/关节阻抗控制里的比例增益
+Kp_null = np.asarray([50.0, 50.0, 50.0, 50.0, 40.0, 25.0, 25.0])
 
 # Damping ratio for both Cartesian and joint impedance control.
 damping_ratio = 1.0
@@ -155,7 +155,28 @@ def main() -> None:
             
             if external_force_compensation:
                 tau += jac.T @ f_ext
-                        
+
+            # ------------------------------
+            # 零空间控制
+            # ------------------------------
+            # 动态一致的伪逆
+            Jbar = M_inv @ jac.T @ Mx
+
+            # Torque-space nullspace projector
+            N_tau = np.eye(model.nv) - jac.T @ Jbar.T
+
+            # Desired nullspace joint acceleration
+            ddq_null = (
+                Kp_null * (q0 - data.qpos[dof_ids])
+                - Kd_null * data.qvel[dof_ids]
+            )
+
+            # Convert desired joint acceleration to torque,
+            # then project it into the task nullspace  
+            tau_null = N_tau @ (M @ ddq_null) #M为关节空间的惯性矩阵
+
+            tau += tau_null
+
             # 科氏/离心项 + 重力项补偿
             if gravity_compensation:
                 tau += data.qfrc_bias[dof_ids]
